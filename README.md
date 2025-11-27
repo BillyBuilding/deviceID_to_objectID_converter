@@ -1,2 +1,19 @@
-# deviceID_to_objectID_converter
-This script queries Microsoft Graph to translate an Intune Managed Device ID      into its corresponding Azure AD Object ID.           This is useful because Intune and Azure AD use different identifiers.      The Object ID is required for operations like adding devices to Azure AD Groups
+# Intune to Entra ID Device Translator
+
+A PowerShell script using the Microsoft Graph SDK to retrieve the Azure AD (Entra ID) Object ID based on an Intune Managed Device ID.
+
+## Prerequisites
+
+- PowerShell 5.1 or PowerShell 7+
+- Microsoft Graph PowerShell SDK (`Install-Module Microsoft.Graph`)
+
+## Permissions
+
+ The account or Managed Identity running this script requires the following Microsoft Graph API scopes:
+ - `DeviceManagementManagedDevices.Read.All`
+ - `Device.Read.All`
+
+## Usage
+
+```powershell
+.\Get-EntraIdFromIntune.ps1 -IntuneDeviceId "your-guid-here"
