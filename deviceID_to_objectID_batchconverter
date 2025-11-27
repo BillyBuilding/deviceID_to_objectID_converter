@@ -1,0 +1,115 @@
+<#
+.SYNOPSIS
+    Converts a list of Intune Managed Device IDs to Azure AD (Entra ID) Object IDs.
+
+.DESCRIPTION
+    This script accepts an array of Intune Device IDs (or pipeline input) and queries Microsoft Graph
+    to find the corresponding Azure AD Object ID for each.
+    
+    It matches Intune 'ManagedDeviceId' -> 'AzureADDeviceId' -> Azure AD 'ObjectId'.
+
+.PARAMETER IntuneDeviceIds
+    An array of GUIDs representing the Intune Managed Device IDs.
+    Accepts pipeline input.
+
+.PARAMETER OutputIdOnly
+    If specified, the script outputs a simple array of String GUIDs.
+    If omitted (default), the script outputs a structured object with details on source and target.
+
+.EXAMPLE
+    # Example 1: Pass a list of IDs
+    $List = "00573fe3-1ea2-...", "11223344-5566-..."
+    .\Get-EntraIdFromIntune-Bulk.ps1 -IntuneDeviceIds $List
+
+.EXAMPLE
+    # Example 2: Pipe from CSV and get only the IDs out
+    Import-Csv ".\devices.csv" | Select -ExpandProperty IntuneId | .\Get-EntraIdFromIntune-Bulk.ps1 -OutputIdOnly
+
+.NOTES
+    Required Modules: Microsoft.Graph.DeviceManagement, Microsoft.Graph.Identity.DirectoryManagement
+    Required Scopes: DeviceManagementManagedDevices.Read.All, Device.Read.All
+#>
+
+[CmdletBinding()]
+param (
+    [Parameter(Mandatory = $true, ValueFromPipeline = $true, ValueFromPipelineByPropertyName = $true, HelpMessage = "Enter Intune Device IDs")]
+    [string[]]$IntuneDeviceIds,
+
+    [Parameter(Mandatory = $false)]
+    [switch]$OutputIdOnly
+)
+
+begin {
+    # Define scopes
+    $RequiredScopes = @("DeviceManagementManagedDevices.Read.All", "Device.Read.All")
+
+    # Connect to Graph if not already connected
+    try {
+        if (-not (Get-MgContext)) {
+            Write-Verbose "Connecting to Microsoft Graph..."
+            Connect-MgGraph -Scopes $RequiredScopes -ErrorAction Stop
+        }
+    }
+    catch {
+        Write-Error "Failed to connect to Microsoft Graph. $_"
+        exit 1
+    }
+    
+    # Initialize a generic list if we are just outputting IDs
+    $IdList = [System.Collections.Generic.List[string]]::new()
+}
+
+process {
+    foreach ($intuneId in $IntuneDeviceIds) {
+        try {
+            Write-Verbose "Processing Intune ID: $intuneId"
+            
+            # 1. Get Intune Device
+            # We use try/catch inside the loop so one failure doesn't stop the whole batch
+            $intuneDeviceObj = Get-MgDeviceManagementManagedDevice -ManagedDeviceId $intuneId -ErrorAction Stop
+
+            if ($null -eq $intuneDeviceObj) {
+                Write-Warning "Intune ID $intuneId not found."
+                continue
+            }
+
+            # 2. Get the Sync Key (AzureADDeviceId)
+            $hardwareId = $intuneDeviceObj.AzureADDeviceId
+
+            if ([string]::IsNullOrEmpty($hardwareId)) {
+                Write-Warning "Intune ID $intuneId exists but has no AzureADDeviceId (Not synced)."
+                continue
+            }
+
+            # 3. Get Entra Object
+            $entraObject = Get-MgDevice -Filter "deviceId eq '$hardwareId'" -ErrorAction Stop
+
+            if ($null -eq $entraObject) {
+                Write-Warning "Hardware ID $hardwareId (from Intune $intuneId) not found in Azure AD."
+                continue
+            }
+
+            $finalObjectId = $entraObject.Id
+
+            # 4. Handle Output
+            if ($OutputIdOnly) {
+                # Add to list to output as a clean array later, or output immediately
+                Write-Output $finalObjectId
+            }
+            else {
+                # Create a nice object for reporting
+                [PSCustomObject]@{
+                    IntuneDeviceId  = $intuneId
+                    AzureADName     = $entraObject.DisplayName
+                    AzureADObjectId = $finalObjectId
+                    Status          = "Success"
+                }
+            }
+
+        }
+        catch {
+            # Log the error but allow the loop to continue to the next ID
+            Write-Error "Error processing ID $intuneId: $_"
+        }
+    }
+}
